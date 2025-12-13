@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game of Life - v1.02</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --grid-line-color: #333;
+            --cell-color: #4CAF50;
+            --cell-hover-color: #45a049;
+            --text-color: #eee;
+            --panel-bg: #2a2a2a;
+            --button-bg: #3a3a3a;
+            --button-hover: #505050;
+            --button-active: #4CAF50;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh; /* Fallback */
+            height: 100dvh;
+            overflow: hidden;
+        }
+
+        header {
+            width: 100%;
+            padding: 5px 0;
+            text-align: center;
+            background-color: var(--panel-bg);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.0rem;
+            letter-spacing: 2px;
+        }
+
+        #game-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            overflow: hidden; /* スクロールバーを防止 */
+            min-height: 0; /* Flexboxの子要素が縮小できるようにする */
+            position: relative;
+        }
+
+        canvas {
+            background-color: #000;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            cursor: crosshair;
+        }
+
+        #controls {
+            width: 100%;
+            padding: 10px;
+            background-color: var(--panel-bg);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin: 0 5px;
+        }
+
+        button {
+            background-color: var(--button-bg);
+            color: var(--text-color);
+            border: 1px solid #444;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: background-color 0.2s;
+            user-select: none;
+        }
+
+        button:hover {
+            background-color: var(--button-hover);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        button.active {
+            background-color: var(--button-active);
+            color: white;
+            font-weight: bold;
+        }
+
+        .label-text {
+            font-size: 0.85rem;
+            margin-right: 5px;
+        }
+
+        input[type="range"] {
+            width: 80px;
+            cursor: pointer;
+        }
+
+        #stats {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #aaa;
+            margin-left: auto;
+            padding: 0 10px;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 600px) {
+            #controls {
+                justify-content: space-between;
+                padding: 8px;
+            }
+            .control-group {
+                flex: 1 1 auto;
+                justify-content: center;
+                margin: 2px;
+            }
+            #stats {
+                width: 100%;
+                text-align: center;
+                margin: 2px 0;
+                order: -1;
+            }
+        }
+    </style>
+
+    <!-- PWA Settings -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('service-worker.js');
+        }
+    </script>
+</head>
+<body>
+    <header>
+        <h1>CONWAY'S GAME OF LIFE</h1>
+    </header>
+
+    <div id="game-container">
+        <canvas id="gridCanvas"></canvas>
+    </div>
+
+    <div id="controls">
+        <div id="stats">Gen: 0 | Live: 0</div>
+        
+        <div class="control-group">
+            <button id="btn-toggle">再生</button>
+            <button id="btn-step">次</button>
+        </div>
+
+        <div class="control-group">
+            <button id="btn-clear">クリア</button>
+            <button id="btn-random">ランダム</button>
+        </div>
+
+        <div class="control-group">
+            <span class="label-text">速:</span>
+            <input type="range" id="speed-range" min="1" max="60" value="30">
+        </div>
+        
+         <div class="control-group">
+            <span class="label-text">大:</span>
+            <input type="range" id="zoom-range" min="5" max="50" value="20">
+        </div>
+    </div>
+
+    <script>
+        // 設定
+        const CONFIG = {
+            cellSize: 20,
+            gridColor: '#222',
+            liveColor: '#4CAF50',
+            deadColor: '#000',
+            defaultFps: 30
+        };
+
+        // 状態管理
+        let state = {
+            rows: 0,
+            cols: 0,
+            grid: [],
+            nextGrid: [],
+            isRunning: false,
+            generation: 0,
+            lastFrameTime: 0,
+            fps: CONFIG.defaultFps,
+            animationId: null,
+            isDrawing: false,
+            drawMode: true // true = add, false = remove
+        };
+
+        // DOM要素
+        const canvas = document.getElementById('gridCanvas');
+        const ctx = canvas.getContext('2d');
+        const btnToggle = document.getElementById('btn-toggle');
+        const btnStep = document.getElementById('btn-step');
+        const btnClear = document.getElementById('btn-clear');
+        const btnRandom = document.getElementById('btn-random');
+        const sliderSpeed = document.getElementById('speed-range');
+        const sliderZoom = document.getElementById('zoom-range');
+        const statsDisplay = document.getElementById('stats');
+
+        // 初期化
+        function init() {
+            resizeCanvas();
+            createGrid();
+            draw();
+            setupEventListeners();
+            
+            // ウィンドウリサイズ対応
+            window.addEventListener('resize', () => {
+                resizeCanvas();
+                const oldGrid = state.grid;
+                const oldRows = state.rows;
+                const oldCols = state.cols;
+                
+                createGrid(); // 新しいサイズで初期化
+
+                // データの引継ぎ
+                for (let y = 0; y < Math.min(state.rows, oldRows); y++) {
+                    for (let x = 0; x < Math.min(state.cols, oldCols); x++) {
+                        state.grid[y][x] = oldGrid[y][x];
+                    }
+                }
+                draw();
+            });
+        }
+
+        // キャンバスサイズ設定
+        function resizeCanvas() {
+            const container = document.getElementById('game-container');
+            // コンテナのサイズに完全に一致させる
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            
+            state.cols = Math.floor(canvas.width / CONFIG.cellSize);
+            state.rows = Math.floor(canvas.height / CONFIG.cellSize);
+        }
+
+        // グリッド作成 (全て0で初期化)
+        function createGrid() {
+            state.grid = new Array(state.rows).fill(null).map(() => new Array(state.cols).fill(0));
+            state.nextGrid = new Array(state.rows).fill(null).map(() => new Array(state.cols).fill(0));
+        }
+
+        // ランダム配置
+        function randomizeGrid() {
+            for (let y = 0; y < state.rows; y++) {
+                for (let x = 0; x < state.cols; x++) {
+                    state.grid[y][x] = Math.random() > 0.85 ? 1 : 0;
+                }
+            }
+            state.generation = 0;
+            draw();
+            updateStats();
+        }
+
+        // クリア
+        function clearGrid() {
+            for (let y = 0; y < state.rows; y++) {
+                for (let x = 0; x < state.cols; x++) {
+                    state.grid[y][x] = 0;
+                }
+            }
+            state.generation = 0;
+            stopGame();
+            draw();
+            updateStats();
+        }
+
+        // 描画ループ
+        function draw() {
+            ctx.fillStyle = CONFIG.deadColor;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // グリッド線
+            ctx.strokeStyle = CONFIG.gridColor;
+            ctx.lineWidth = 1;
+            
+            ctx.beginPath();
+            // 縦線
+            for (let x = 0; x <= state.cols; x++) {
+                ctx.moveTo(x * CONFIG.cellSize, 0);
+                ctx.lineTo(x * CONFIG.cellSize, state.rows * CONFIG.cellSize);
+            }
+            // 横線
+            for (let y = 0; y <= state.rows; y++) {
+                ctx.moveTo(0, y * CONFIG.cellSize);
+                ctx.lineTo(state.cols * CONFIG.cellSize, y * CONFIG.cellSize);
+            }
+            ctx.stroke();
+
+            // セル描画
+            ctx.fillStyle = CONFIG.liveColor;
+            for (let y = 0; y < state.rows; y++) {
+                for (let x = 0; x < state.cols; x++) {
+                    if (state.grid[y][x] === 1) {
+                        ctx.fillRect(
+                            x * CONFIG.cellSize + 1, 
+                            y * CONFIG.cellSize + 1, 
+                            CONFIG.cellSize - 2, 
+                            CONFIG.cellSize - 2
+                        );
+                    }
+                }
+            }
+        }
+
+        // 次の世代を計算
+        function computeNextGeneration() {
+            let liveCount = 0;
+            
+            for (let y = 0; y < state.rows; y++) {
+                for (let x = 0; x < state.cols; x++) {
+                    const neighbors = countNeighbors(x, y);
+                    const cell = state.grid[y][x];
+
+                    if (cell === 0 && neighbors === 3) {
+                        state.nextGrid[y][x] = 1;
+                    } else if (cell === 1 && (neighbors === 2 || neighbors === 3)) {
+                        state.nextGrid[y][x] = 1;
+                    } else {
+                        state.nextGrid[y][x] = 0;
+                    }
+                    
+                    if (state.nextGrid[y][x] === 1) liveCount++;
+                }
+            }
+
+            let temp = state.grid;
+            state.grid = state.nextGrid;
+            state.nextGrid = temp;
+
+            state.generation++;
+            updateStats(liveCount);
+        }
+
+        // 近傍の生存セル数をカウント
+        function countNeighbors(x, y) {
+            let sum = 0;
+            for (let i = -1; i < 2; i++) {
+                for (let j = -1; j < 2; j++) {
+                    if (i === 0 && j === 0) continue;
+                    
+                    const col = (x + i + state.cols) % state.cols;
+                    const row = (y + j + state.rows) % state.rows;
+
+                    sum += state.grid[row][col];
+                }
+            }
+            return sum;
+        }
+
+        // アニメーションループ
+        function gameLoop(timestamp) {
+            if (!state.isRunning) return;
+
+            const interval = 1000 / state.fps;
+            if (timestamp - state.lastFrameTime > interval) {
+                computeNextGeneration();
+                draw();
+                state.lastFrameTime = timestamp;
+            }
+
+            state.animationId = requestAnimationFrame(gameLoop);
+        }
+
+        // ゲーム開始
+        function startGame() {
+            if (state.isRunning) return;
+            state.isRunning = true;
+            btnToggle.textContent = "一時停止";
+            btnToggle.classList.add('active');
+            state.lastFrameTime = performance.now();
+            gameLoop(state.lastFrameTime);
+        }
+
+        // ゲーム停止
+        function stopGame() {
+            state.isRunning = false;
+            btnToggle.textContent = "再生";
+            btnToggle.classList.remove('active');
+            if (state.animationId) {
+                cancelAnimationFrame(state.animationId);
+            }
+        }
+
+        // 統計更新
+        function updateStats(liveCount) {
+            if (liveCount === undefined) {
+                liveCount = 0;
+                for (let y = 0; y < state.rows; y++) {
+                    for (let x = 0; x < state.cols; x++) {
+                        if (state.grid[y][x]) liveCount++;
+                    }
+                }
+            }
+            statsDisplay.textContent = `Gen: ${state.generation} | Live: ${liveCount}`;
+        }
+
+        // イベントリスナー設定
+        function setupEventListeners() {
+            btnToggle.addEventListener('click', () => {
+                if (state.isRunning) {
+                    stopGame();
+                } else {
+                    startGame();
+                }
+            });
+
+            btnStep.addEventListener('click', () => {
+                stopGame();
+                computeNextGeneration();
+                draw();
+            });
+
+            btnClear.addEventListener('click', clearGrid);
+
+            btnRandom.addEventListener('click', randomizeGrid);
+
+            sliderSpeed.addEventListener('input', (e) => {
+                state.fps = parseInt(e.target.value);
+            });
+            
+            sliderZoom.addEventListener('input', (e) => {
+                CONFIG.cellSize = parseInt(e.target.value);
+                resizeCanvas();
+                const oldGrid = state.grid;
+                createGrid();
+                for (let y = 0; y < Math.min(state.rows, oldGrid.length); y++) {
+                    for (let x = 0; x < Math.min(state.cols, oldGrid[0].length); x++) {
+                        state.grid[y][x] = oldGrid[y][x];
+                    }
+                }
+                draw();
+            });
+
+            function getGridPos(e) {
+                const rect = canvas.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                
+                const x = Math.floor((clientX - rect.left) / CONFIG.cellSize);
+                const y = Math.floor((clientY - rect.top) / CONFIG.cellSize);
+                return { x, y };
+            }
+
+            function handleInteract(x, y) {
+                if (x >= 0 && x < state.cols && y >= 0 && y < state.rows) {
+                    state.grid[y][x] = state.drawMode ? 1 : 0;
+                    draw();
+                    updateStats();
+                }
+            }
+
+            canvas.addEventListener('mousedown', (e) => {
+                state.isDrawing = true;
+                const { x, y } = getGridPos(e);
+                if (x >= 0 && x < state.cols && y >= 0 && y < state.rows) {
+                    state.drawMode = state.grid[y][x] === 0;
+                    handleInteract(x, y);
+                }
+            });
+
+            window.addEventListener('mouseup', () => {
+                state.isDrawing = false;
+            });
+
+            canvas.addEventListener('mousemove', (e) => {
+                if (state.isDrawing) {
+                    const { x, y } = getGridPos(e);
+                    handleInteract(x, y);
+                }
+            });
+
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                state.isDrawing = true;
+                const { x, y } = getGridPos(e);
+                if (x >= 0 && x < state.cols && y >= 0 && y < state.rows) {
+                    state.drawMode = state.grid[y][x] === 0;
+                    handleInteract(x, y);
+                }
+            }, { passive: false });
+
+            window.addEventListener('touchend', () => {
+                state.isDrawing = false;
+            });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (state.isDrawing) {
+                    const { x, y } = getGridPos(e);
+                    handleInteract(x, y);
+                }
+            }, { passive: false });
+        }
+
+        init();
+        randomizeGrid();
+        
+    </script>
+</body>
+</html>
